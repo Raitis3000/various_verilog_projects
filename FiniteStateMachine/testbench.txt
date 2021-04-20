@@ -1,0 +1,53 @@
+`timescale 10 ns / 100 ps
+
+module millisecClk_tb();
+
+	reg clk, reset, D, timer_msClk_out, train_signal, sensor, amber_delay, train_pass_delay, RG, RA, RR, TG, TA, TR, gate_out; 
+  	reg [1:0] counter;
+    reg [2:0] state_out;
+  	reg [8:0] counter2;
+  	reg [13:0] counter3;
+  
+	Top_module uut (
+	  .clk(clk),
+	  .reset(reset),
+	  .D(D),
+      .timer_msClk_out(timer_msClk_out),
+      .train_signal(train_signal),
+      .sensor(sensor),
+      .amber_delay(amber_delay),
+      .train_pass_delay(train_pass_delay),
+      .counter(counter),
+      .state_out(state_out),
+      .counter2(counter2),
+      .counter3(counter3),
+      .RG(RG),
+      .RA(RA),
+      .RR(RR),
+      .TG(TG),
+      .TA(TA),
+      .TR(TR),
+      .gate_out(gate_out)
+	);
+
+  
+	initial begin
+      
+      $dumpfile("dump.vcd");
+  	  $dumpvars(1,millisecClk_tb);
+      
+	  clk = 0;
+	  reset = 1;
+      D = 0;
+      
+	  
+      @(posedge clk)#5 reset = 0;
+      @(posedge clk)#500 D = 1;
+      @(posedge clk)#6000 D = 0;
+      @(posedge clk)#7000 $finish;
+	end
+	
+	always begin 
+	  #10 clk = ~clk; // 4MHz clock
+	end
+endmodule

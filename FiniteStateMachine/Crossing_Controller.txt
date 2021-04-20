@@ -1,0 +1,230 @@
+module millisecClk(clk, reset, D, clkOut, train_signal);	//Module that creates a custom clock with a period of 1ms and send train detector signal to FSM
+  
+  input  clk, reset, D; 			//clk is the devices clock signal, reset is the reset function and D is the train detector
+  output reg clkOut, train_signal; 	//clkOut is the created 1ms period clock signal and train_signal is a signal that indicates 
+									//every 20ms whether a train is detected or not
+
+  parameter PERIOD = 4; //4000 period for 1 ms clock with a 4Mhz device
+  						//4 period for a 1 us clock with a 4Mhz device
+  						//using 1us clock timer to test device due to EDA playground limitations 
+  						//below conversions (waveform timescale = real timescale)
+  						//(1us = 1ms, 1ms=1s, 1ns=1us)
+						
+						//IF WANT TO FIT SPECIFICATIONS
+						//ASSUMING 4Mhz clock, set PERIOD to 4000 for real life application of 1ms clock
+  
+  localparam HALFPERIOD = PERIOD/2;   
+
+  initial begin
+	train_signal = 0;
+    clkOut = 0;
+  end
+
+  reg [11:0] counter = 0; 	 //4000 period needs 12 bits				
+  reg [4:0] counter2 = 0;	 //counter for train_signal
+
+  always@(posedge clkOut)				// Sends a 1 ms high signa to FSM if no train detected, 2ms high if detected once every 20ms (50Hz)
+  begin 				
+	if (counter2 == 9)	counter2 <= 0;	// counts 10ms then resets (100Hz)
+										// IF WANT TO FIT SPECIFICATIONS CHANGE counter2 == 19
+	else counter2 <= counter2 + 1;
+    
+	if (counter2 == 0) train_signal <= 1;				// beginning of every 20ms send a high signal
+	else if (D & (counter2 == 1)) train_signal <= 1; 	// send another high signal the next clkOut cycle if a train is detected
+	else train_signal <= 0;								// otherwise train_signal is low for the rest of the 20ms cycle	
+  end
+
+  always@(posedge clk)begin		//set up a 1ms clock cycle (used given example as template)
+
+      if (reset) begin			//device does not start without an initial restart trigger.
+        counter <= 0;
+        clkOut  <= 0;
+      end
+
+      else begin
+        if (counter == (PERIOD - 1)) begin
+          counter <= 0;
+          clkOut  <= 0;
+        end
+        else begin
+          counter <= counter + 1;
+        end
+        if (counter == (HALFPERIOD - 1)) begin
+          clkOut <= 1 ;
+        end
+      end
+
+  end
+endmodule
+
+module Finite_State_Machine (			//FSM determines what state is the device in
+	input msClk, // 1ms clock cycle signal
+	input reset, //reset FSM to initial state
+	input train_signal, //railway track detector/sensor
+  	
+ 	output reg sensor,		
+  	output reg amber_delay, train_pass_delay, 
+  	output reg [1:0] counter,	//2 bit counter for the purpose of counting how many cycles the train_signal is high
+  	output reg [2:0] state_out, //state output that goes in to the light controller and gate controller
+  	output reg [8:0] counter2,	//9bit counter to count up to 500ms for the amber_delay
+  	output reg [13:0] counter3	//14bit counter to count up to 9000ms for the time_pass_delay
+	);
+  //The following ports are configured as outputs only for testbench purposes: 
+  //					sensor, amber_delay, train_pass_delay, counter, counter2, counter3
+  
+  
+  	localparam S0=3'b000, S1=3'b001, S2=3'b010, S3=3'b011, S4=3'b100, S5=3'b101, S6=3'b110; //all the possible states
+    //S0:[RG,TR], S1:[RA,TR], S2:[RR,TA,TR], S3:[RR,TG], S4:[RR,TG], S5:[RR,TA], S6:[RR,RA,TR]
+  
+  
+  	reg [2:0] next_state = 0; // Next state
+  	reg [2:0] state = 0;		//current state
+  
+    initial begin
+		counter = 0;
+		counter2 = 0;				
+		counter3 = 0;
+		train_pass_delay = 0; 	//time delay for train to pass X seconds
+								//1-bit register that stays high for one 1ms for the state
+								//S3 to move on
+		amber_delay = 0;		//time delay on amber
+								//1-bit register that stays high for 1ms for the states
+								//S1, S2, S5 and S6 to move on
+		sensor = 0;				//logic for whether the train is detected or not, 1 for detected, 0 for not.
+    end
+  
+  	always @(posedge msClk) begin					//this loop checks the signal coming from the train signal
+      	if (train_signal) counter <= counter + 1; 	//start counting if detected signal (comes every 20ms)
+    
+      	if (!train_signal & counter == 1)begin	//if the first signal was high and 2nd one is low, that means no train on tracks
+      		counter<=0;
+      		sensor<= 0;
+    	end
+    
+      	if (counter == 2) begin			//if both the first and the 2nd signal are high, that means train is on tracks
+      		counter <= 0;
+      		sensor <= 1;
+    	end
+    end
+  
+  	always@(posedge msClk)begin							//amber_delay specifies at which states and for how long should RA and TA stay high
+		if ((state == S1) | (state == S2) | (state == S5) | (state == S6)) begin 				//which states enable amber_delay
+			counter2 <= counter2 + 1;
+		end
+		if((counter2 == 5)&((state == S1)|(state == S2)|(state == S5)|(state == S6)))begin	//wait 6 msClk cycles if in S1, S2, S5 or S6, then set amber_delay to high
+																							//IF WANT TO FIT SPECIFICATIONS CHANGE counter2 == 499
+			amber_delay <= 1;
+		end
+		if(counter2 == 6) begin 			//set amber_delay back to low the next cycle as well as reset the counter
+											//IF WANT TO FIT SPECIFICATIONS CHANGE counter2 == 500
+			counter2 <= 0;
+			amber_delay <=0;
+		end
+	end
+  
+  always@(posedge msClk)begin			//train_pass_delay function that works the same as amber_delay always loop
+      if (state == S4) begin
+		counter3 <= counter3 + 1;
+      end
+    if((counter3 == 9)&(state == S4))begin	//adjust integer to any value to specify how long to wait after train has passed (ms)
+											//IF WANT TO FIT SPECIFICATIONS CHANGE counter3 == 8999		
+         	train_pass_delay <= 1;
+      end
+    if(counter3 == 10) begin				//IF WANT TO FIT SPECIFICATIONS CHANGE counter3 == 9000
+        counter3 <= 0;
+        train_pass_delay <=0;
+      end
+	end
+	  
+	
+  always @(posedge msClk) begin //sets up FSM
+		case (state)
+          S0: if(sensor) next_state = S1; 	//if the sensor senses train, move on to S1 and close the gate
+				else  next_state = S0; 		//else keep gates open, track lights to red and road lights to green
+				
+          S1: if(amber_delay) next_state = S2; //wait 0.5 seconds at RA,TR and close gate
+				else 			next_state = S1;
+				
+          S2: if (amber_delay) next_state = S3; //wait 0.5 seconds at RR,TA,TR and keep gate closed
+				else			 next_state = S2;
+				
+          S3: if (!sensor)	next_state = S4; 	//keep RR,TG until sensor doesn't detect anything and keep gate closed
+				else 	next_state = S3; 
+				
+          S4: if (train_pass_delay) next_state = S5; //wait 9 seconds at RR,TG, and keep gate closed
+				else 				  next_state = S4; 
+				
+          S5: if (amber_delay) next_state = S6; //wait 0.5 seconds at RR,TA and keep gate closed
+				else 			 next_state = S5;
+				
+          S6: if (amber_delay) next_state = S0; //wait 0.5 seconds at RR, RA,TR, and raise gate
+				else 			 next_state = S6;
+			
+			default: next_state = 3'bxxx; //Don't care about unspecified bits in state
+		endcase
+	end
+	
+	always @(posedge msClk, posedge reset) begin
+      	if (reset) state <= S0;		//if reset is triggered, set current state to S0
+		else state <= next_state;	//else set next state as current state
+	end
+	
+	assign state_out = state; //state_out goes to light_control and gate_control
+	
+endmodule
+
+module light_control(		//controls what lights are on
+  	input [2:0] current_state,
+	
+	output RG, //road green
+	output RA, //road amber
+	output RR, //road red
+	
+	output TG, //track green
+	output TA, //track amber
+	output TR  //track red
+	);
+	
+	localparam S0=3'b000, S1=3'b001, S2=3'b010, S3=3'b011, S4=3'b100, S5=3'b101, S6=3'b110; //all the possible states
+	//S0:[RG,TR], S1:[RA,TR], S2:[RR,TA,TR], S3:[RR,TG], S4:[RR,TG], S5:[RR,TA], S6:[RR,RA,TR]
+	
+	assign TR = ((S0 == current_state)|(S1 == current_state)|(S6 == current_state)|(S2 == current_state)) ? 1 : 0; //TRAIN red if S0, S1, S2, S6 is current state.
+  	assign TA = ((S2 == current_state)|(S5 == current_state)) ? 1 : 0; //TRAIN amber if S2, S5 is current state.
+  	assign TG = ((S3 == current_state)|(S4 == current_state)) ? 1 : 0; //TRAIN green if S3 or S4 is current state
+	
+  	assign RR = ((S2 == current_state)|(S3 == current_state)|(S4 == current_state)|(S5 == current_state)|(S6 == current_state)) ? 1 : 0; //ROAD red if S2, S3, S4, S5 or S6 is current state
+  	assign RA = ((S1 == current_state)|(S6 == current_state)) ? 1 : 0; //ROAD amber if S1 or S6 is current state
+  	assign RG = (S0 == current_state) ? 1 : 0 ; //ROAD green if S0 is current state
+	
+endmodule
+
+module gate_control(				//Controls the gate opening or closing
+  	input [2:0] current_state,		//reads the current state
+	output gate_high_low 			//if signal is high then close the gates, if signal is low then open the gates
+	);
+	
+	localparam S0=3'b000, S1=3'b001, S2=3'b010, S3=3'b011, S4=3'b100, S5=3'b101, S6=3'b110; //all the possible states
+  //S0:[RG,TR], S1:[RA,TR], S2:[RR,TA,TR], S3:[RR,TG], S4:[RR,TG], S5:[RR,TA], S6:[RR,RA,TR]
+	
+  	assign gate_high_low = ((current_state == S0)|(current_state == S6)) ? 0 : 1; //open/keep the gates up unless the state is S0 or S6
+	
+endmodule
+
+module Top_module(		//Top module to tie everything together
+	input clk, reset, D,
+
+  	output timer_msClk_out, train_signal, sensor, amber_delay, train_pass_delay, RG, RA, RR, TG, TA, TR, gate_out, 
+  	output reg [1:0] counter,
+  	output reg [2:0] state_out,
+  	output reg [8:0] counter2,
+  	output reg [13:0] counter3);
+  
+    wire timer_msClk_out, train_signal, sensor, amber_delay, train_pass_delay, RG, RA, RR, TG, TA, TR, gate_out;
+
+
+    millisecClk		 		Timer					(clk, reset, D, timer_msClk_out, train_signal);
+  	Finite_State_Machine 	FSM						(timer_msClk_out, reset, train_signal, sensor, amber_delay, train_pass_delay, counter, state_out, counter2, counter3);
+	light_control 			light_controller		(state_out, RG, RA, RR, TG, TA, TR);
+	gate_control			gate_controller			(state_out, gate_out);
+	
+endmodule
